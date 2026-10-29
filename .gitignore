@@ -32,3 +32,20 @@ Thumbs.db
 
 # Local banking sample data
 data/raw/*.csv
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local database backups
+*.sql.bak
+*.dump
+*.backup
+
+# Python test and coverage artifacts
+.coverage
+htmlcov/
+.pytest_cache/
