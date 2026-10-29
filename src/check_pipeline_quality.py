@@ -13,6 +13,12 @@ DB_CONFIG = {
     "user": "etl_user",
 }
 
+EXPECTED_ISSUE_TYPES = {
+    "MISSING_AMOUNT": 1,
+    "ACCOUNT_NOT_FOUND": 1,
+    "MISSING_OR_UNPARSED_DATE": 1,
+}
+
 
 def main():
     # Используем пароль из окружения, если его передал оркестратор.
@@ -91,7 +97,7 @@ def main():
                 f"Пустых ID: {empty_ids}",
             ))
 
-            # Проверка 4. Количество проблем качества.
+            # Проверка 4. Общее количество проблем качества.
             cur.execute("""
                 SELECT COUNT(*)
                 FROM analytics.transaction_quality_issues
@@ -100,8 +106,28 @@ def main():
 
             checks.append((
                 "Количество проблем качества соответствует ожиданию",
-                issue_count == 3,
-                f"Найдено проблем: {issue_count}, ожидалось: 3",
+                issue_count == sum(EXPECTED_ISSUE_TYPES.values()),
+                (
+                    f"Найдено проблем: {issue_count}, "
+                    f"ожидалось: {sum(EXPECTED_ISSUE_TYPES.values())}"
+                ),
+            ))
+
+            # Проверка 5. Конкретные типы проблем качества.
+            cur.execute("""
+                SELECT issue_type, COUNT(*)
+                FROM analytics.transaction_quality_issues
+                GROUP BY issue_type
+            """)
+            actual_issue_types = dict(cur.fetchall())
+
+            checks.append((
+                "Типы проблем качества соответствуют ожиданию",
+                actual_issue_types == EXPECTED_ISSUE_TYPES,
+                (
+                    f"Найдено: {actual_issue_types}; "
+                    f"ожидалось: {EXPECTED_ISSUE_TYPES}"
+                ),
             ))
 
     print("\n=== ПРОВЕРКА КАЧЕСТВА ETL ===")
