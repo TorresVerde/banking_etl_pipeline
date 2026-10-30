@@ -1,4 +1,3 @@
-
 from pathlib import Path
 import logging
 import os
@@ -21,7 +20,8 @@ LOG_DIR = PROJECT_DIR / "logs"
 LOG_FILE = LOG_DIR / "pipeline.log"
 
 LOADER_SCRIPT = SRC_DIR / "load_to_staging.py"
-QUALITY_SCRIPT = SRC_DIR / "check_pipeline_quality.py"
+SOURCE_QUALITY_SCRIPT = SRC_DIR / "check_source_quality.py"
+PIPELINE_QUALITY_SCRIPT = SRC_DIR / "check_pipeline_quality.py"
 
 DB_CONFIG = {
     "host": "localhost",
@@ -60,13 +60,65 @@ def setup_logging():
 
 
 # ============================================================
-# 3. Загрузка исходных данных
+# 3. Проверка наличия необходимых скриптов
+# ============================================================
+
+def validate_project_files():
+    """Проверяет наличие скриптов и SQL-файлов."""
+
+    required_files = [
+        LOADER_SCRIPT,
+        SOURCE_QUALITY_SCRIPT,
+        PIPELINE_QUALITY_SCRIPT,
+    ]
+
+    required_files.extend(
+        SQL_DIR / filename
+        for filename in SQL_FILES
+    )
+
+    for file_path in required_files:
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"Необходимый файл не найден: {file_path}"
+            )
+
+    logging.info("Все необходимые файлы проекта найдены.")
+
+
+# ============================================================
+# 4. Проверка исходных CSV
+# ============================================================
+
+def run_source_quality_checks(env):
+    """
+    Проверяет исходные CSV перед загрузкой в staging.
+
+    Обнаруженные аномалии выводятся в отчёт.
+    Сам скрипт check_source_quality.py пока не останавливает
+    процесс при обнаружении дубликатов или нарушений связей.
+    """
+
+    logging.info("[1/5] Проверка исходных CSV-файлов...")
+
+    subprocess.run(
+        [sys.executable, str(SOURCE_QUALITY_SCRIPT)],
+        cwd=PROJECT_DIR,
+        env=env,
+        check=True,
+    )
+
+    logging.info("Проверка исходных CSV завершена.")
+
+
+# ============================================================
+# 5. Загрузка исходных данных
 # ============================================================
 
 def load_source_data(env):
-    """Запускает загрузку CSV-файлов в staging."""
+    """Загружает исходные CSV-файлы в staging."""
 
-    logging.info("[1/4] Загрузка исходных данных...")
+    logging.info("[2/5] Загрузка исходных данных...")
 
     subprocess.run(
         [sys.executable, str(LOADER_SCRIPT)],
@@ -79,39 +131,33 @@ def load_source_data(env):
 
 
 # ============================================================
-# 4. SQL-трансформации и аналитика
+# 6. SQL-трансформации и аналитика
 # ============================================================
 
 def execute_sql_files(conn):
     """Последовательно выполняет SQL-файлы проекта."""
 
-    logging.info("[2/4] Выполнение SQL-трансформаций и аналитики...")
+    logging.info("[3/5] SQL-трансформации и аналитика...")
 
     for filename in SQL_FILES:
         sql_path = SQL_DIR / filename
 
-        if not sql_path.exists():
-            raise FileNotFoundError(
-                f"SQL-файл не найден: {sql_path}"
-            )
-
         logging.info("Выполняется %s...", filename)
 
         sql_text = sql_path.read_text(encoding="utf-8")
-
         conn.execute(sql_text)
 
         logging.info("Файл %s выполнен успешно.", filename)
 
 
 # ============================================================
-# 5. Проверка результатов ETL
+# 7. Проверка результатов ETL
 # ============================================================
 
 def validate_pipeline_results(conn):
-    """Проверяет количество строк и базовую целостность результатов."""
+    """Проверяет базовые результаты ETL."""
 
-    logging.info("[3/4] Проверка результатов ETL...")
+    logging.info("[4/5] Проверка результатов ETL...")
 
     with conn.cursor() as cur:
         cur.execute(
@@ -135,18 +181,9 @@ def validate_pipeline_results(conn):
         )
         issue_count = cur.fetchone()[0]
 
-    logging.info(
-        "clean.transactions: %s",
-        clean_count,
-    )
-    logging.info(
-        "clean.transactions_typed: %s",
-        typed_count,
-    )
-    logging.info(
-        "analytics.customer_summary: %s",
-        customer_count,
-    )
+    logging.info("clean.transactions: %s", clean_count)
+    logging.info("clean.transactions_typed: %s", typed_count)
+    logging.info("analytics.customer_summary: %s", customer_count)
     logging.info(
         "analytics.transaction_quality_issues: %s",
         issue_count,
@@ -166,46 +203,37 @@ def validate_pipeline_results(conn):
 
 
 # ============================================================
-# 6. Проверка качества данных
+# 8. Проверка качества обработанных данных
 # ============================================================
 
-def run_quality_checks(env):
-    """Запускает отдельный скрипт проверок качества."""
+def run_pipeline_quality_checks(env):
+    """Запускает проверки качества результатов ETL."""
 
-    logging.info("[4/4] Проверка качества данных...")
+    logging.info("[5/5] Проверка качества обработанных данных...")
 
     subprocess.run(
-        [sys.executable, str(QUALITY_SCRIPT)],
+        [sys.executable, str(PIPELINE_QUALITY_SCRIPT)],
         cwd=PROJECT_DIR,
         env=env,
         check=True,
     )
 
-    logging.info("Проверка качества данных завершена успешно.")
+    logging.info("Проверка качества обработанных данных завершена.")
 
 
 # ============================================================
-# 7. Основной процесс ETL
+# 9. Основной процесс ETL
 # ============================================================
 
 def main():
     setup_logging()
 
-    logging.info("=" * 55)
+    logging.info("=" * 60)
     logging.info("BANKING ETL PIPELINE: запуск")
-    logging.info("=" * 55)
+    logging.info("=" * 60)
 
-    if not LOADER_SCRIPT.exists():
-        raise FileNotFoundError(
-            f"Скрипт загрузки не найден: {LOADER_SCRIPT}"
-        )
+    validate_project_files()
 
-    if not QUALITY_SCRIPT.exists():
-        raise FileNotFoundError(
-            f"Скрипт проверки качества не найден: {QUALITY_SCRIPT}"
-        )
-
-    # Запрашиваем пароль один раз.
     # Пароль не записывается в лог.
     password = os.environ.get("BANKING_ETL_DB_PASSWORD")
 
@@ -215,13 +243,14 @@ def main():
     env = os.environ.copy()
     env["BANKING_ETL_DB_PASSWORD"] = password
 
-    # Этап 1. Загружаем исходные CSV-файлы.
+    # Этап 1. Проверяем исходные CSV.
+    run_source_quality_checks(env)
+
+    # Этап 2. Загружаем данные в staging.
     load_source_data(env)
 
-    # Этапы 2 и 3. Выполняем SQL и проверяем результаты.
-    logging.info(
-        "Подключение к базе данных PostgreSQL..."
-    )
+    # Этапы 3 и 4. Преобразуем данные и проверяем результаты.
+    logging.info("Подключение к базе данных PostgreSQL...")
 
     with psycopg.connect(
         **DB_CONFIG,
@@ -230,17 +259,17 @@ def main():
         execute_sql_files(conn)
         validate_pipeline_results(conn)
 
-    # Этап 4. Проверяем качество данных.
-    run_quality_checks(env)
+    # Этап 5. Проверяем качество обработанных данных.
+    run_pipeline_quality_checks(env)
 
-    logging.info("=" * 55)
+    logging.info("=" * 60)
     logging.info("BANKING ETL PIPELINE: успешно завершён")
     logging.info("Лог сохранён: %s", LOG_FILE)
-    logging.info("=" * 55)
+    logging.info("=" * 60)
 
 
 # ============================================================
-# 8. Точка входа и обработка ошибок
+# 10. Точка входа и обработка ошибок
 # ============================================================
 
 if __name__ == "__main__":
